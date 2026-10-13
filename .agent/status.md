@@ -1,9 +1,11 @@
 # Current implementation state
 
-Updated: 2026-10-13. Version: 0.3.0. All six application phases and the large-mailbox follow-up are
-implemented. The user explicitly replaced the initial scaffold-only scope and authorized GitHub push.
+Updated: 2026-10-13. Version: 0.3.0. The latest user request changes the extraction boundary to a
+strict physical-file exporter. Phase 1 is refactored; native Python MSG parsing is the next Phase-2
+implementation task. Earlier sidecar-based application/deployment verification is historical evidence,
+not evidence that the current Python pipeline consumes the new raw exports.
 
-## Implemented
+## Existing application and historical baseline
 
 - English classic-Outlook VBA based on the updated source: Long counters, per-email completion
   markers, no mailbox-sized checkpoint dictionary and no global JSONL/Markdown generation. Copy-only
@@ -32,7 +34,7 @@ implemented. The user explicitly replaced the initial scaffold-only scope and au
   persisted volumes and isolated writable/no-network catalog tool. Native PyInstaller GUI/backend/
   dashboard bundles and Linux/Windows/macOS CI, full README and MIT license preserved.
 
-## Executed verification for this follow-up
+## Historical verification at commit 85fcf36
 
 - Python 3.12.14, uv 0.12.23: 89 pytest tests passed, none failed or skipped, including real Tk tests
   under Xvfb. Ruff lint/format passed; strict mypy passed for 62 source files; five architecture
@@ -71,12 +73,31 @@ current default Ollama endpoint. Existing EW_LLM_API_KEY/EW_API_TOKEN were absen
 Windows/macOS jobs are configured; signing/notarization is not supplied. Model quality is unmeasured.
 Cloud draft save is separate from publication/restoration in a new task; neither is claimed verified.
 
-## Handoff
+## Current refactor and handoff
 
-Final code/deployment checks passed. GitHub publication is user-authorized; verify the remote main
-SHA against the current commit separately when reporting publication.
-Temporary validation fixtures are synthetic and outside Git. Temporary services/fixture volumes were stopped/removed after
-verification; finished native bundles/images remain available. Reusable install/start instructions
-and required CDN domain are saved in the cloud draft; settings review/publication remains separate. Preserve root config.yaml/.env; both remain ignored. A previous config using
-archive_pst=true must explicitly switch to MSG backups (false); prefer a fresh export root for layout
-migration. Keep live DuckDB/SQLite/Chroma caches out of OneDrive/SharePoint synchronization.
+The VBA writes only Email.msg, qualifying physical attachments separated into Type_<extension>/Other,
+and internal export.lock/Processed_Cache.log/_state/source_id.txt/complete.txt. It never reads message
+body text or emits Email.txt, metadata.json, JSONL, Markdown or RAG maps. Track flags are ignored by
+the exporter; Python owns routing and all RAG data modeling. Existing GUI cleanup validation still
+adds a Track-2 guard, while macro cleanup requires its own explicit opt-in/default-No confirmation.
+
+The append-only log is operational history, never loaded as a mailbox-sized cache. Versioned raw-msg-v1
+markers cannot reuse old sidecar checkpoints. Full identity/MSG presence are checked before skips;
+all physical writes and completion precede source cleanup. Use a fresh export root: legacy files are
+never deleted automatically. Read-only legacy source identity and Python lock checks preserve safety.
+
+Four focused VBA guard tests passed and an independent source review found no blocking syntax/safety
+issue. Classic Outlook compilation/runtime remains unexecuted on Linux. Final verification:90 pytest tests passed (none skipped under Xvfb), strict mypy62files, Ruff
+lint/format,5architecturecontracts and wheel/source builds passed. The new .bas asset is in the wheel.
+Existing native bundles/Docker images contain the previous VBA asset and were not rebuilt for this
+VBA/documentation-only change. Rebuild from the updated checkout to distribute the current macro.
+
+Native MSG extraction (extract-msg is a candidate), header/body metadata, attachment association and
+integration with bounded DuckDB/Polars JSONL/Markdown remain pending Python Phase 2. The current catalog
+still accepts legacy metadata.json sidecars only. Do not run it against fresh MSG-only exports or
+claim that pipeline is complete; an unguarded raw-only run could publish an empty catalog.
+
+The cloud startup draft explicitly marks catalog/ingest as legacy-only until native MSG parsing is
+implemented. Saving is separate from environment publication. The user authorized the exact refactor
+commit message and GitHub push. Preserve ignored config.yaml,
+.env, data and MIT license; no mailbox actions or unrelated user-data cleanup were performed.

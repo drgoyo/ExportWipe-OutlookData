@@ -1,7 +1,13 @@
-# Scalable export catalogs and recovery
+# Legacy export catalogs and recovery
 
-VBA writes only bounded, per-email metadata and content files. Python owns all mailbox-wide indexes.
-Run `outlook-rag --config config.yaml catalog --batch-size 256` after the Outlook export finishes.
+**Compatibility:** this catalog supports exports produced by the earlier sidecar-based VBA. The
+current strict extractor writes only MSG files, physical attachments and operational state; it
+does not write `metadata.json` or text. Native Python MSG parsing and its catalog integration are
+the next Phase 2 task. Do not use these commands as a conversion workflow for a fresh MSG-only
+export: without sidecars, the current catalog can publish an empty generation.
+
+For an existing legacy export with completed per-email metadata and content files, Python owns all
+mailbox-wide indexes. Run `outlook-rag --config config.yaml catalog --batch-size 256` after export finishes.
 The raw directory comes from extraction.output_directory, resolved relative to the YAML file.
 
 Polars validates/deduplicates batches, writes a temporary Parquet batch, and feeds a disk-backed
@@ -23,17 +29,32 @@ Keep open DuckDB and SQLite files outside synchronized OneDrive/SharePoint libra
 
 ## Completion and duplicate handling
 
-New email directories require _rag/complete.txt before their sidecar is read. Incomplete exports are
-counted and excluded, the Markdown contains a visible warning, and the CLI returns status 1. Rerun
-VBA in copy-only mode to finish those items, then rebuild. A missing/invalid referenced artifact,
+Legacy email directories require _rag/complete.txt before their sidecar is read. Incomplete exports are
+counted and excluded, the Markdown contains a visible warning, and the CLI returns status 1. Restore
+incomplete legacy artifacts from a verified backup before rebuilding; the current MSG-only macro
+cannot regenerate their metadata sidecars. A missing/invalid referenced artifact,
 malformed metadata, path escape, or conflicting identity aborts publication and preserves the previous
 catalog. Symbolic-link traversal is rejected. The old per-email layout and UTF-16 sidecars are supported.
 
 Equal duplicate records collapse into one email. A shared email ID with different source identity or
 different metadata is an error; the catalog never chooses an arbitrary copy. When moving from the old
 extension-separated layout, use a fresh export root to avoid mixing different paths for the same mail.
-Existing global UTF-16 master files from the supplied older macro are not a source for this catalog;
-reexport with the new per-email macro.
+Existing global UTF-16 master files from the supplied older macro are not a source for this catalog.
+Only compatible per-email sidecars are inputs. Reexporting with the current MSG-only macro does not
+restore this legacy format; preserve older exports separately.
+
+## New MSG-only extraction contract
+
+VBA saves `Mail/YYYY/MM/<readable-mail-folder>/Email.msg` plus
+`Attachments/Type_<extension>/...` (or `Other/`) and `_state/source_id.txt`/`complete.txt`. Root state
+is `export.lock` and append-only `Processed_Cache.log`. These are operational files, not email
+metadata sources. A fresh root is required to avoid retaining older sidecars and text files.
+
+Python Phase 2 must parse MSG bodies, sender/recipients and metadata natively, for example through
+`extract-msg`, associate physical attachments, and create all RAG records. It will connect those
+records to bounded Polars/DuckDB batches and streamed JSONL/Markdown publication. Track routing and
+metadata-only privacy remain Python responsibilities. Native MSG parsing is not implemented in the
+current refactor; the disk-backed generation/recovery machinery below remains legacy-only for now.
 
 ## Locks and interrupted publication
 

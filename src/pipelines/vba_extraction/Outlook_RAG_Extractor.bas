@@ -1,7 +1,8 @@
 Attribute VB_Name = "Outlook_RAG_Extractor"
 Option Explicit
 
-' Classic Outlook for Windows. Copy-only by default; Python builds the global catalogs.
+' Classic Outlook for Windows. Export physical files and operational state only.
+' Python Phase 2 owns MSG parsing, text extraction, metadata and all RAG modeling.
 Private Type ExportConfiguration
     OutputDirectory As String
     FilterDate As Date
@@ -9,31 +10,26 @@ Private Type ExportConfiguration
     MinimumAttachmentBytes As Long
     ExcludeFreemail As Boolean
     FreemailDomains As String
-    Track1Enabled As Boolean
-    Track2Enabled As Boolean
     ProcessAllSubfolders As Boolean
     DeletionMode As Long
     AllowDestructive As Boolean
 End Type
 
 Public Sub ExtractOutlookForRAG()
-    Dim cfg As ExportConfiguration, iniPath As String, lockPath As String, errorText As String, probePath As String
-    Dim fso As Object, lockStream As Object, source As Outlook.MAPIFolder
+    Dim cfg As ExportConfiguration, iniPath As String, lockPath As String, errorText As String
+    Dim fso As Object, lockStream As Object, cacheStream As Object, source As Outlook.MAPIFolder
     Dim exported As Long, skipped As Long, failed As Long, acquiredLock As Boolean
     On Error GoTo FatalError
     iniPath = InputBox("Path to the extractor.ini saved by the Python configuration GUI:", _
         "Outlook RAG", Environ$("USERPROFILE") & "\Documents\OutlookRAG\extractor.ini")
     If Len(Trim$(iniPath)) = 0 Then Exit Sub
     cfg = LoadConfiguration(Trim$(iniPath))
-    If Not cfg.Track1Enabled And Not cfg.Track2Enabled Then
-        Err.Raise vbObjectError + 101, , "Enable at least one RAG track."
-    End If
     If cfg.DeletionMode < 0 Or cfg.DeletionMode > 2 Then
         Err.Raise vbObjectError + 102, , "deletion_mode must be 0, 1, or 2."
     End If
     If cfg.DeletionMode <> 0 Then
-        If Not cfg.AllowDestructive Or Not cfg.Track2Enabled Then
-            Err.Raise vbObjectError + 103, , "Cleanup requires allow_destructive=true and Track 2."
+        If Not cfg.AllowDestructive Then
+            Err.Raise vbObjectError + 103, , "Cleanup requires allow_destructive=true."
         End If
         If MsgBox("Cleanup mode " & cfg.DeletionMode & " modifies the source mailbox." & vbCrLf & _
             "A complete .msg is saved first. Confirm an independent mailbox backup exists." & _
@@ -54,20 +50,21 @@ Public Sub ExtractOutlookForRAG()
     lockStream.WriteLine "Outlook export started " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
     lockStream.Close
     AssertCatalogIdle fso, cfg.OutputDirectory
-    probePath = cfg.OutputDirectory & "\_rag_write_" & fso.GetTempName
-    WriteUTF8 probePath, "Write permission test"
-    fso.DeleteFile probePath, True
-    ProcessFolder source, cfg, fso, exported, skipped, failed
+    ' Append operational history; never load a mailbox-sized log or identity cache.
+    Set cacheStream = fso.OpenTextFile(cfg.OutputDirectory & "\Processed_Cache.log", 8, True, -1)
+    ProcessFolder source, cfg, fso, cacheStream, exported, skipped, failed
+    cacheStream.Close
     fso.DeleteFile lockPath, True
     acquiredLock = False
     MsgBox "Export complete." & vbCrLf & "Exported: " & exported & "; skipped: " & skipped & _
         "; failed: " & failed & vbCrLf & "Output: " & cfg.OutputDirectory & vbCrLf & _
-        "Run the Python catalog command next. Errors: VBA Immediate window (Ctrl+G).", _
+        "Files are ready for Python Phase 2 MSG parsing. Errors: Ctrl+G in the VBA editor.", _
         vbInformation, "Outlook RAG"
     Exit Sub
 FatalError:
     errorText = Err.Description
     On Error Resume Next
+    If Not cacheStream Is Nothing Then cacheStream.Close
     If Not lockStream Is Nothing Then lockStream.Close
     If acquiredLock Then fso.DeleteFile lockPath, True
     On Error GoTo 0
@@ -77,7 +74,8 @@ FatalError:
 End Sub
 
 Private Sub ProcessFolder(ByVal folder As Outlook.MAPIFolder, ByRef cfg As ExportConfiguration, _
-    ByVal fso As Object, ByRef exported As Long, ByRef skipped As Long, ByRef failed As Long)
+    ByVal fso As Object, ByVal cacheStream As Object, ByRef exported As Long, _
+    ByRef skipped As Long, ByRef failed As Long)
     Dim items As Outlook.Items, item As Object, child As Outlook.MAPIFolder
     Dim i As Long, errorText As String, visitingChildren As Boolean
     On Error GoTo FolderError
@@ -90,7 +88,7 @@ Private Sub ProcessFolder(ByVal folder As Outlook.MAPIFolder, ByRef cfg As Expor
             Debug.Print "Cannot read item in " & FolderName(folder) & ": " & errorText
         ElseIf Not item Is Nothing Then
             If TypeOf item Is Outlook.MailItem Then
-                Select Case ExportOneMail(item, folder, cfg, fso, errorText)
+                Select Case ExportOneMail(item, folder, cfg, fso, cacheStream, errorText)
                     Case 1: exported = exported + 1
                     Case 0: skipped = skipped + 1
                     Case -1
@@ -104,7 +102,7 @@ VisitChildren:
     visitingChildren = True
     If cfg.ProcessAllSubfolders Then
         For Each child In folder.Folders
-            ProcessFolder child, cfg, fso, exported, skipped, failed
+            ProcessFolder child, cfg, fso, cacheStream, exported, skipped, failed
         Next child
     End If
     Exit Sub
@@ -126,11 +124,12 @@ End Function
 
 ' Returns 1 when exported, 0 when filtered/checkpointed, -1 on an item failure.
 Private Function ExportOneMail(ByVal mail As Outlook.MailItem, ByVal folder As Outlook.MAPIFolder, _
-    ByRef cfg As ExportConfiguration, ByVal fso As Object, ByRef errorText As String) As Long
-    Dim sender As String, sourceKey As String, emailID As String, signature As String, suffix As String
-    Dim relativeDirectory As String, directory As String, technical As String, marker As String
-    Dim attachment As Outlook.Attachment, attachmentJSON As String, filename As String
-    Dim i As Long, extracted As Object, bodyFile As String, metadata As String, folderBudget As Long
+    ByRef cfg As ExportConfiguration, ByVal fso As Object, ByVal cacheStream As Object, _
+    ByRef errorText As String) As Long
+    Dim sender As String, sourceKey As String, signature As String, suffix As String
+    Dim directory As String, stateDirectory As String, marker As String, legacyIdentity As String
+    Dim attachment As Outlook.Attachment, filename As String, typeDirectory As String
+    Dim i As Long, extracted As Object, folderBudget As Long
     On Error GoTo ItemError
     sender = SenderSMTP(mail)
     If cfg.ExcludeFreemail Then
@@ -143,57 +142,50 @@ Private Function ExportOneMail(ByVal mail As Outlook.MailItem, ByVal folder As O
     sourceKey = folder.StoreID & ":" & mail.EntryID
     If Len(mail.EntryID) = 0 Then Err.Raise vbObjectError + 105, , "Message has no stable EntryID."
     suffix = CRC32Hex(sourceKey)
-    emailID = Format$(mail.ReceivedTime, "yyyymmdd_hhnnss") & "_" & suffix
     folderBudget = 180 - Len(cfg.OutputDirectory) - 14
-    relativeDirectory = "Mail/" & Format$(mail.ReceivedTime, "yyyy") & "/" & _
-        Format$(mail.ReceivedTime, "mm") & "/" & _
-        FriendlyFolder(mail, sender, suffix, folderBudget) & "/"
-    directory = cfg.OutputDirectory & "\" & Replace(relativeDirectory, "/", "\")
-    technical = directory & "_rag\"
-    EnsureDirectory fso, technical
-    If fso.FileExists(technical & "source_id.txt") Then
-        If ReadUTF8(technical & "source_id.txt") <> sourceKey Then
+    directory = cfg.OutputDirectory & "\Mail\" & Format$(mail.ReceivedTime, "yyyy") & "\" & _
+        Format$(mail.ReceivedTime, "mm") & "\" & _
+        FriendlyFolder(mail, sender, suffix, folderBudget) & "\"
+    stateDirectory = directory & "_state\"
+    EnsureDirectory fso, stateDirectory
+    If fso.FileExists(stateDirectory & "source_id.txt") Then
+        If ReadUTF8(stateDirectory & "source_id.txt") <> sourceKey Then
             Err.Raise vbObjectError + 106, , "Identity collision; use a different export root."
         End If
     End If
-    signature = CStr(cfg.Track1Enabled) & ":" & CStr(cfg.Track2Enabled) & ":" & _
-        CStr(cfg.MinimumAttachmentBytes)
+    ' Read old operational identity only to prevent overwriting a different archived message.
+    legacyIdentity = directory & "_rag\source_id.txt"
+    If fso.FileExists(legacyIdentity) Then
+        If ReadUTF8(legacyIdentity) <> sourceKey Then
+            Err.Raise vbObjectError + 106, , "Legacy identity collision; use a fresh export root."
+        End If
+    End If
+    signature = "raw-msg-v1:" & CStr(cfg.MinimumAttachmentBytes)
     marker = sourceKey & vbLf & signature
-    If fso.FileExists(technical & "complete.txt") And fso.FileExists(technical & "metadata.json") _
-        And fso.FileExists(directory & "Email.msg") Then
-        If ReadUTF8(technical & "complete.txt") = marker Then Exit Function
+    If fso.FileExists(stateDirectory & "complete.txt") And _
+        fso.FileExists(stateDirectory & "source_id.txt") And fso.FileExists(directory & "Email.msg") Then
+        If ReadUTF8(stateDirectory & "complete.txt") = marker Then Exit Function
     End If
     ' Invalidate an older checkpoint before overwriting any artifacts on a changed configuration.
-    If fso.FileExists(technical & "complete.txt") Then fso.DeleteFile technical & "complete.txt", True
-    WriteUTF8 technical & "source_id.txt", sourceKey
+    If fso.FileExists(stateDirectory & "complete.txt") Then fso.DeleteFile stateDirectory & "complete.txt", True
+    WriteUTF8 stateDirectory & "source_id.txt", sourceKey
     mail.SaveAs directory & "Email.msg", Outlook.olMSGUnicode
     Set extracted = CreateObject("Scripting.Dictionary") ' One message only; no mailbox-sized cache.
-    If cfg.Track2Enabled Then
-        bodyFile = relativeDirectory & "Email.txt"
-        WriteUTF8 directory & "Email.txt", mail.Body
-        EnsureDirectory fso, directory & "Attachments"
-        For i = 1 To mail.Attachments.Count
-            Set attachment = mail.Attachments.Item(i)
-            If attachment.Type = Outlook.olByValue And attachment.Size >= cfg.MinimumAttachmentBytes Then
-                filename = Format$(i, "000") & " "
-                filename = filename & SafeName(attachment.FileName, _
-                    240 - Len(directory & "Attachments\") - Len(filename), True)
-                attachment.SaveAsFile directory & "Attachments\" & filename
-                If Len(attachmentJSON) > 0 Then attachmentJSON = attachmentJSON & ","
-                attachmentJSON = attachmentJSON & JSONString(relativeDirectory & "Attachments/" & filename)
-                extracted.Add CStr(i), True
-            End If
-        Next i
-    End If
-    metadata = "{""schema_version"":3,""doc_type"":""email"",""email_id"":" & JSONString(emailID) & _
-        ",""source_key"":" & JSONString(sourceKey) & ",""outlook_folder"":" & JSONString(FolderName(folder)) & _
-        ",""sender"":" & JSONString(sender) & ",""subject"":" & JSONString(mail.Subject) & _
-        ",""date"":" & JSONString(Format$(mail.ReceivedTime, "yyyy-mm-dd\Thh\:nn\:ss")) & _
-        ",""msg_file"":" & JSONString(relativeDirectory & "Email.msg") & _
-        ",""body_file"":" & JSONString(bodyFile) & ",""extracted_attachments"": [" & attachmentJSON & "]}"
-    ' Every exported artifact and metadata is committed before any mailbox modification.
-    WriteUTF8 technical & "metadata.json", metadata
-    WriteUTF8 technical & "complete.txt", marker
+    For i = 1 To mail.Attachments.Count
+        Set attachment = mail.Attachments.Item(i)
+        If attachment.Type = Outlook.olByValue And attachment.Size >= cfg.MinimumAttachmentBytes Then
+            typeDirectory = directory & "Attachments\" & AttachmentTypeFolder(fso, attachment.FileName) & "\"
+            EnsureDirectory fso, typeDirectory
+            filename = Format$(i, "000") & " "
+            filename = filename & SafeName(attachment.FileName, 240 - Len(typeDirectory) - Len(filename), True)
+            attachment.SaveAsFile typeDirectory & filename
+            extracted.Add CStr(i), True
+        End If
+    Next i
+    ' Operational history may repeat after an interrupted run; the per-mail marker is authoritative.
+    cacheStream.WriteLine sourceKey & vbTab & signature
+    ' Every physical artifact and checkpoint is committed before any mailbox modification.
+    WriteUTF8 stateDirectory & "complete.txt", marker
     If cfg.DeletionMode = 1 Then
         For i = mail.Attachments.Count To 1 Step -1
             If extracted.Exists(CStr(i)) Then mail.Attachments.Item(i).Delete
@@ -259,8 +251,6 @@ Private Function LoadConfiguration(ByVal path As String) As ExportConfiguration
     cfg.FreemailDomains = ValueOrDefault(values, "freemail_domains", _
         "gmail.com,googlemail.com,outlook.com,hotmail.com,live.com,web.de,gmx.de,gmx.net,gmx.com," & _
         "yahoo.com,yahoo.de,icloud.com,me.com,mac.com,t-online.de,freenet.de,aol.com")
-    cfg.Track1Enabled = BooleanValue(values, "track1_enabled", True)
-    cfg.Track2Enabled = BooleanValue(values, "track2_enabled", True)
     cfg.ProcessAllSubfolders = BooleanValue(values, "process_all_subfolders", True)
     If BooleanValue(values, "archive_pst", False) Then
         Err.Raise vbObjectError + 114, , "Set archive_pst=false; this extractor saves independent MSG backups."
@@ -420,23 +410,17 @@ Private Function SafeLeft(ByVal value As String, ByVal length As Long) As String
     If code >= &HD800& And code <= &HDBFF& Then SafeLeft = Left$(SafeLeft, Len(SafeLeft) - 1)
 End Function
 
-Private Function JSONString(ByVal value As String) As String
-    JSONString = """" & EscapeJSON(value) & """"
-End Function
-
-Private Function EscapeJSON(ByVal value As String) As String
-    Dim result As String, i As Long, character As String, code As Long
-    For i = 1 To Len(value)
-        character = Mid$(value, i, 1)
-        code = AscW(character) And &HFFFF&
-        Select Case code
-            Case 34: result = result & "\"""
-            Case 92: result = result & "\\"
-            Case 0 To 31: result = result & "\u" & Right$("0000" & Hex$(code), 4)
-            Case Else: result = result & character
-        End Select
+Private Function AttachmentTypeFolder(ByVal fso As Object, ByVal filename As String) As String
+    Dim extension As String, character As String, i As Long
+    AttachmentTypeFolder = "Other"
+    extension = LCase$(fso.GetExtensionName(filename))
+    If Len(extension) = 0 Or Len(extension) > 12 Then Exit Function
+    For i = 1 To Len(extension)
+        character = Mid$(extension, i, 1)
+        If Not character Like "[a-z0-9]" Then Exit Function
     Next i
-    EscapeJSON = result
+    ' A fixed prefix prevents Windows device names such as CON, AUX and COM1.
+    AttachmentTypeFolder = "Type_" & extension
 End Function
 
 ' Full source identity is checked on disk, so a CRC collision cannot overwrite another email.

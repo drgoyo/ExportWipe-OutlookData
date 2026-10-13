@@ -15,28 +15,35 @@ def test_macro_structure_and_export_before_cleanup() -> None:
     )
     assert '"deletion_mode", "0"' in text
     assert "vbDefaultButton2" in text
-    assert "Not cfg.AllowDestructive Or Not cfg.Track2Enabled" in text
+    assert "If Not cfg.AllowDestructive Then" in text
     assert "As Integer" not in text
     assert "dim property" not in text.lower()
-    commit = text.index('WriteUTF8 technical & "complete.txt", marker')
-    assert text.index('WriteUTF8 technical & "metadata.json", metadata') < commit
+    commit = text.index('WriteUTF8 stateDirectory & "complete.txt", marker')
     assert text.index('mail.SaveAs directory & "Email.msg", Outlook.olMSGUnicode') < commit
     assert text.index("attachment.SaveAsFile") < commit < text.index("If cfg.DeletionMode = 1 Then")
-    retry = text.index('fso.DeleteFile technical & "complete.txt", True')
+    assert text.index("cacheStream.WriteLine sourceKey & vbTab & signature") < commit
+    retry = text.index('fso.DeleteFile stateDirectory & "complete.txt", True')
     assert retry < text.index('mail.SaveAs directory & "Email.msg", Outlook.olMSGUnicode')
-    assert "Case 0 To 31:" in text
-    assert "EscapeJSON(mail.Body)" not in text
     assert 'Format$(mail.ReceivedTime, "yyyy/mm/")' not in text
 
 
-def test_macro_uses_bounded_sidecars_without_pst_or_global_indexes() -> None:
+def test_macro_outputs_only_physical_files_and_internal_state() -> None:
     text = MACRO_PATH.read_text()
     for removed in (
         "RebuildIndexes",
         "CollectMetadata",
         "Master_Index.jsonl",
         "Master_Context.md",
-        "Processed_Cache.log",
+        "Email.txt",
+        "metadata.json",
+        "mail.Body",
+        "HTMLBody",
+        "RTFBody",
+        "EscapeJSON",
+        "JSONString",
+        "relativeDirectory",
+        "Track1Enabled",
+        "Track2Enabled",
         "processedDict",
         "archiveKeys",
         "mail.Copy",
@@ -46,15 +53,38 @@ def test_macro_uses_bounded_sidecars_without_pst_or_global_indexes() -> None:
     assert '"archive_pst", False' in text
     assert '"date_filter_mode", "0"' in text
     assert '"process_all_subfolders", True' in text
-    assert 'technical = directory & "_rag\\"' in text
-    assert '""source_key""' in text
-    assert '""outlook_folder""' in text
-    assert '"Mail/"' in text
-    assert 'directory & "Attachments\\"' in text
+    assert 'stateDirectory = directory & "_state\\"' in text
+    assert 'signature = "raw-msg-v1:"' in text
+    assert '"\\Mail\\"' in text
+    assert '"\\Processed_Cache.log", 8, True, -1' in text
+    assert "cacheStream.Read" not in text
+    writes = re.findall(r"^\s+WriteUTF8 (.+)$", text, re.M)
+    assert writes == [
+        'stateDirectory & "source_id.txt", sourceKey',
+        'stateDirectory & "complete.txt", marker',
+    ]
     assert text.count("AssertCatalogIdle fso, cfg.OutputDirectory") == 2
     assert "fso.CreateTextFile(lockPath, False, False)" in text
     assert "\\_rag\\catalog.lock" in text
     assert "\\_rag\\catalog_publication.json" in text
+
+
+def test_type_folders_and_idempotency_do_not_depend_on_rag_artifacts() -> None:
+    text = MACRO_PATH.read_text()
+    exporting = text.split("Private Function ExportOneMail", 1)[1].split("End Function", 1)[0]
+    assert 'If ReadUTF8(stateDirectory & "source_id.txt") <> sourceKey Then' in exporting
+    assert 'fso.FileExists(stateDirectory & "complete.txt")' in exporting
+    assert 'fso.FileExists(directory & "Email.msg")' in exporting
+    assert 'If ReadUTF8(stateDirectory & "complete.txt") = marker Then Exit Function' in exporting
+    assert "AttachmentTypeFolder(fso, attachment.FileName)" in exporting
+    assert "240 - Len(typeDirectory) - Len(filename)" in exporting
+    assert "For i = 1 To mail.Attachments.Count" in exporting
+    types = text.split("Private Function AttachmentTypeFolder", 1)[1].split("End Function", 1)[0]
+    assert "LCase$(fso.GetExtensionName(filename))" in types
+    assert "Len(extension) = 0 Or Len(extension) > 12" in types
+    assert 'Like "[a-z0-9]"' in types
+    assert 'AttachmentTypeFolder = "Other"' in types
+    assert 'AttachmentTypeFolder = "Type_" & extension' in types
 
 
 def test_macro_recipient_filter_fails_closed_and_resets_each_address() -> None:

@@ -28,6 +28,12 @@ bundles at the same YAML using `--config`. The default directories are relative 
 Keep the .bas module available for manual import into classic Outlook as described in the VBA guide.
 The web dashboard serves on the loopback interface by default and the GUI requires a desktop display.
 
+The current source macro exports only MSG files, type-grouped attachments and internal checkpoints.
+It writes no body text or metadata sidecars. Rebuild bundles/images to package this updated asset;
+already generated distributions contain the macro from their own build. Python-native MSG parsing
+(for example `extract-msg`) and its catalog integration remain the next Phase 2 task. The current
+backend can ingest valid legacy manifests, but cannot convert a fresh MSG-only export into RAG data.
+
 ## Container stack
 
 Docker Engine/Compose are required. Set a random EW_API_TOKEN in an untracked .env file. For example,
@@ -41,9 +47,12 @@ Backend/dashboard get a separate outbound network for LLM/model downloads. Runti
 use UID 10001, read-only root filesystems, no capabilities, explicit memory/PID limits, and writable
 state/model volumes. The desktop GUI runs on the host, not in a headless server container.
 
-Place completed exports in data/raw before starting ingestion. This host directory is mounted
-read-only for backend/dashboard. Build the master indexes on the host with `outlook-rag catalog`,
-or use the isolated catalog tool with its writable raw mount:
+The existing ingestion commands below apply only to compatible legacy sidecar exports or valid
+manifests with preserved content files. A fresh MSG-only export must wait for native Python MSG
+support; running current catalog against it can publish an empty generation. For legacy exports,
+place completed data in data/raw before ingestion. This host directory is mounted read-only for
+backend/dashboard. Build legacy master indexes on the host with `outlook-rag catalog`, or use the
+isolated catalog tool with its writable raw mount:
 
 ```sh
 docker compose run --rm --no-deps catalog
@@ -60,8 +69,10 @@ docker compose exec backend outlook-rag --config /app/config.yaml sync
 ```
 
 Do not ingest while export.lock/catalog.lock exists or catalog publication requires recovery.
-Keep live DuckDB files local and copy completed Mail/ + master files to OneDrive/SharePoint after
-cataloging closes. See CATALOG.md for crash recovery and MODELS.md for pinned model installation.
+Keep live DuckDB files local. For the new extractor, copy the completed `Mail/` tree, including
+attachments and `_state`, to OneDrive/SharePoint after export; there are no master files yet. For
+legacy exports, copy completed Mail/ + master files after cataloging closes. See CATALOG.md for
+legacy compatibility/crash recovery and MODELS.md for pinned model installation.
 Startup health checks test SQLite and Chroma connectivity,
 not model download completion or LLM answer quality. To customize parsing limits or OCR settings,
 mount your validated non-secret config.yaml at /app/config.yaml; EW_* environment overrides still

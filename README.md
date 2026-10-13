@@ -1,20 +1,27 @@
 # Outlook Dual-Track RAG
 
-Export Outlook mail into readable folders, process Office documents and images, and query the result
-through metadata-only AI, semantic retrieval, SQL/MCP, and an analytics dashboard. Python 3.12+,
+Export Outlook mail into readable folders and let Python own the RAG data model: message parsing,
+metadata, Markdown, JSONL, semantic retrieval, SQL/MCP, and analytics. Python 3.12+,
 uv, Polars, DuckDB, SQLite, Chroma, FastEmbed, and Streamlit form the implementation. The project is
 licensed under [MIT](LICENSE); downloaded models keep their own licenses.
 
 Classic Outlook for Windows runs the VBA extractor. Python runs on Windows, Linux, and macOS.
 The desktop configuration GUI runs on the host; Docker runs the backend, Chroma, and dashboard.
 
+**Current integration boundary:** the VBA now exports only MSG files, physical attachments and its
+operational checkpoints. Native Python MSG parsing is the next Phase 2 task; `extract-msg` is a
+candidate, not an installed or implemented parser. The existing Python catalog consumes the earlier
+`metadata.json` sidecars and cannot process a fresh MSG-only export. The extraction refactor does not
+claim that the new format already works end to end.
+
 ## Dual-track architecture
 
 ```mermaid
 flowchart LR
-    O[Classic Outlook] --> V[VBA: one email at a time]
-    V --> F[Mail folders: MSG, text, attachments, metadata]
-    F --> C[Python catalog: bounded Polars batches and DuckDB]
+    O[Classic Outlook] --> V[VBA: physical-file extractor]
+    V --> F[Mail folders: MSG and attachments by type]
+    F --> MP[Python Phase 2: native MSG parsing - pending]
+    MP --> C[Python catalog: bounded Polars batches and DuckDB]
     C --> I[Master_Index.jsonl and Master_Context.md]
     I --> T1[Track 1: metadata-only LLM]
     I --> P[Track 2: Office parsing and OCR]
@@ -29,12 +36,19 @@ flowchart LR
 
 | Component | Responsibility |
 | --- | --- |
+| VBA / Phase 1 | Export Unicode MSG files and qualifying attachments; maintain only extraction state |
+| Python / Phase 2 | Natively parse MSG bodies, sender/recipients and metadata; associate attachments; own every RAG record |
 | Track 1 | Allowlisted sender, subject, date, IDs and filenames; bounded metadata sent to an LLM |
 | Track 2 | Email text and attachments parsed into Markdown, embedded and retrieved with citations |
 | DuckDB + Polars | Disk-backed export catalog and streamed global index generation |
 | SQLite | Relational metadata, document revisions, synchronization jobs and analytics |
 | Chroma | Semantic vectors for ready document revisions |
 | MCP | Deterministic, bounded, read-only queries against curated metadata views |
+
+All text extraction, metadata schemas, Track 1/Track 2 routing, JSONL and Markdown generation belong
+to Python. VBA reads message properties only for physical filenames, date/privacy filters and stable
+checkpoint identity; it never reads the body or writes a RAG sidecar. Track flags in an older INI do
+not alter physical extraction.
 
 Track 1 strips legacy body/content fields before sending data to the provider. MSG archives still
 contain the full original message, so treat the export folder as sensitive. The freemail filter checks
@@ -61,7 +75,8 @@ The GUI saves validated `config.yaml` and a credential-free `extractor.ini`. Sec
 untracked `.env` or environment variables; see [.env.example](.env.example). `EW_LLM_API_KEY` is needed
 only for providers requiring authentication. The HTTP backend requires a strong `EW_API_TOKEN`.
 Default answer generation uses Ollama at `http://127.0.0.1:11434/v1`; start Ollama and install a model,
-or configure an HTTPS OpenAI-compatible provider. Extraction and catalog generation require no LLM.
+or configure an HTTPS OpenAI-compatible provider. Physical extraction and legacy catalog generation
+require no LLM.
 
 ## Export from Outlook
 
@@ -71,43 +86,63 @@ English [.bas module](src/pipelines/vba_extraction/Outlook_RAG_Extractor.bas), c
 
 Defaults process all dates and subfolders, exclude configured freemail domains and delete nothing.
 No PST creation, Outlook item copying or item modification is required in copy mode. Cleanup requires
-explicit opt-in, Track 2, a complete Unicode MSG backup, and a default-No confirmation. Python never
-deletes mail. Outlook policies can still restrict macros/programmatic access; the guide separates
+explicit opt-in, a complete Unicode MSG backup, and a default-No confirmation. The central GUI/config
+also retains its Track 2 cleanup guard. Python never deletes mail. Outlook policies can still restrict
+macros/programmatic access; the guide separates
 those cases from filesystem permission failures.
 
 Mail and its attachments remain together for browsing in Explorer, OneDrive or SharePoint:
 
 ```text
 data/raw/
-├── extractor.ini
+├── extractor.ini            # Written by the Python GUI, not VBA
+├── Processed_Cache.log       # Append-only extraction history; never loaded as a global cache
 ├── Mail/
 │   └── 2026/01/
 │       └── 2026-01-15_09-30_Contract renewal_client_7A2B3C4D/
 │           ├── Email.msg
-│           ├── Email.txt
 │           ├── Attachments/
-│           │   └── 001 Contract.docx
-│           └── _rag/
-│               ├── metadata.json
+│           │   ├── Type_docx/001 Contract.docx
+│           │   ├── Type_pdf/002 Terms.pdf
+│           │   └── Other/003 attachment
+│           └── _state/
 │               ├── source_id.txt
 │               └── complete.txt
-├── Master_Index.jsonl       # Generated by Python
-├── Master_Context.md        # Generated by Python; metadata only
-└── _rag/                    # Local DuckDB, locks and publication state
+└── export.lock              # Exists only while the VBA export is running
 ```
 
 Readable date, subject and sender labels accompany a stable identity suffix. Attachment numbering
-prevents duplicate names from overwriting each other. Original Outlook folder paths remain in metadata.
+prevents duplicate names from overwriting each other. Extension folders group physical attachments
+inside each email. No email text, metadata JSON, RAG map or master file is produced by VBA.
 The macro checks path length, recursively creates directories, tests write access, and records failures
 without aborting the entire mailbox. `Long` counters and per-email completion markers replace the
-mailbox-sized in-memory cache. Configuration changes trigger a refreshed export.
+mailbox-sized in-memory cache. Attachment-threshold changes trigger a refreshed export; track selection
+does not change raw extraction.
 
-Prefer a short local path such as `C:\OutlookRAG`. After extraction/cataloging finish, copy `Mail/`
-and the master files into your approved OneDrive/SharePoint library. Keep live DuckDB, SQLite, Chroma
+Prefer a short local path such as `C:\OutlookRAG`. After extraction finishes, copy the complete `Mail/`
+snapshot into your approved OneDrive/SharePoint library. Keep live DuckDB, SQLite, Chroma
 and model caches local; do not synchronize open databases. MSG opens in Outlook from Explorer;
 SharePoint/OneDrive browser previews depend on their supported formats.
 
-## Build indexes and ingest
+## Phase 2 integration to implement
+
+Python must open the native `.msg` files, for example with `extract-msg`, to obtain the body, sender,
+recipients, subject, dates and metadata. It must associate the adjacent type-grouped attachments,
+enforce parser/path/size limits, and build its own typed records. Polars batches and a disk-backed
+DuckDB catalog then feed streamed `Master_Index.jsonl` and `Master_Context.md` generation; ingestion
+writes relational metadata and vectors through the existing SQLite/Chroma synchronization layer.
+Track 1 receives allowlisted metadata only, and Track 2 processes content only when enabled in Python.
+Operational `_state` files and `Processed_Cache.log` are not RAG metadata sources.
+
+This MSG-native integration is not implemented in the current refactor. Do not run the existing
+`catalog` command against a new MSG-only export expecting populated indexes: it requires legacy
+sidecars and may otherwise publish an empty catalog. Retain raw files until Phase 2 support is added.
+
+## Existing Python pipeline for legacy sidecar exports
+
+The following commands remain supported **only for exports from the earlier VBA containing
+`metadata.json` and content-file references**, or an already valid manifest with preserved content
+files. They do not convert the new MSG-only format:
 
 ```sh
 uv run --no-sync outlook-rag --config config.yaml catalog --batch-size 256
@@ -121,16 +156,18 @@ uv run --no-sync outlook-rag --config config.yaml ask "Who sent these emails?" -
 uv run --no-sync outlook-rag-dashboard --config config.yaml
 ```
 
-`catalog` scans complete per-email sidecars, validates contained paths, strips content fields, loads
-bounded Polars batches into DuckDB, deduplicates identities and streams both master files. It supports
+The legacy `catalog` scans complete per-email sidecars, validates contained paths, strips content
+fields, loads bounded Polars batches into DuckDB, deduplicates identities and streams both master files. It supports
 the previous per-email export layout too. Incomplete exports are counted and return a nonzero status;
 invalid metadata/colliding identities leave the prior published catalog intact. Interrupted publication
 blocks ingestion until repaired. See [catalog recovery](docs/CATALOG.md).
 
 Supported parsing formats: `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.jpg`/`.jpeg` and `.png`.
-VBA exports `Email.txt` for bodies; Python does not parse `.msg` or legacy binary Office formats.
+Earlier exports supplied `Email.txt` for bodies; the new VBA does not. Python does not yet parse
+`.msg` or legacy binary Office formats.
 Tesseract performs image OCR. Size, expanded ZIP and table-row limits are enforced; document macros
-are never executed. Track 2 must be enabled to export/ingest bodies and attachments.
+are never executed. Track 2 must be enabled to ingest content; raw VBA attachment extraction is
+independent of track selection.
 
 SQLite first records pending revisions and durable synchronization jobs. Chroma writes are replayable;
 successful sync promotes revisions to ready. SQL views/retrieval exclude pending and stale revisions.
@@ -188,7 +225,7 @@ bytes, daily growth, top senders, file types and separate agent controls.
 # First put a strong random EW_API_TOKEN in an untracked .env.
 docker compose config --quiet
 docker compose up --build -d
-# Optional catalog tool: its raw mount must be writable by its configured UID/GID.
+# Legacy sidecar exports only; the raw mount must be writable by its configured UID/GID.
 docker compose run --rm --no-deps catalog
 docker compose exec backend outlook-rag --config /app/config.yaml ingest --manifest /data/raw/Master_Index.jsonl
 ```
@@ -210,8 +247,10 @@ PyInstaller does not cross-compile. CI builds all three OSes. Tk/Tcl, DuckDB, ON
 are collected. Tesseract/language packs and a running LLM remain external prerequisites.
 Signing/notarization need your release credentials. See [deployment and backups](docs/DEPLOYMENT.md).
 
-Upgrading from the earlier export layout: use a fresh export directory to avoid conflicting paths
-for the same email identity. In older YAML set `extraction.archive_pst: false`; the new extractor
+Upgrading from the earlier export layout: use a fresh export directory. The macro does not purge old
+`Email.txt`, `_rag/metadata.json`, master files or attachment folders, and does not reuse old RAG
+completion markers. Existing packaged binaries/images retain the asset from their build; rebuild
+before distributing this updated macro. In older YAML set `extraction.archive_pst: false`; the extractor
 uses independent MSG backups. Choose `date_filter_mode: 0` (all), `1` (before), or `2` (from).
 
 ## Repository and verification

@@ -10,7 +10,8 @@ or real emails in memory.
 - `src/pipelines/vba_extraction/`: Outlook VBA and export-format assets.
 - `src/pipelines/export_catalog/`: bounded DuckDB/Polars catalog and index generation.
 - `src/pipelines/configuration_gui/`: configuration editor presentation.
-- `src/pipelines/document_parsing/`: Office, table, text, and image-to-Markdown processing.
+- `src/pipelines/document_parsing/`: Office, table, text, and image-to-Markdown processing;
+  native MSG parsing is the next Phase 2 integration task.
 - `src/pipelines/data_ingestion/`: chunking and SQL/vector synchronization use cases.
 - `src/pipelines/rag_agents/`: metadata-only and deep-retrieval agent behavior.
 - `src/pipelines/analytics/`: dashboard and metrics presentation.
@@ -45,7 +46,20 @@ require explicit opt-in and an interactive confirmation; never run them as a set
 Secrets are supplied through .env/environment settings, never config.yaml or exported INI files.
 MCP SQL is read-only, limited, and restricted to curated metadata views. SQL/vector writes use a
 durable pending state with replay; never claim an atomic transaction across SQLite and Chroma.
-VBA writes only one email's artifacts at a time; Python builds global indexes in bounded batches.
+VBA is strictly a physical-file extractor. It outputs only Unicode MSG files, qualifying by-value
+attachments grouped by extension under each mail, and operational state: `export.lock`, per-mail
+`_state/source_id.txt` and `_state/complete.txt`, and append-only `Processed_Cache.log`. Never add body
+reads, `Email.txt`, `metadata.json`, JSONL/Markdown generation, RAG maps, domain schemas or track
+routing to VBA. Property reads are limited to filenames, source identity and date/privacy filtering.
+Track flags may remain in the generated INI for backward compatibility but VBA ignores them.
+Python owns 100% of RAG modeling, text extraction, metadata handling, dual-track routing and output
+generation. Phase 2 must natively parse MSG bodies, sender/recipients and metadata, for example with
+`extract-msg`, and associate extracted attachments before building DuckDB/Polars indexes and feeding
+SQLite/vector ingestion. That MSG-native parser is not yet implemented or installed. The current
+catalog reads legacy `metadata.json` sidecars; never describe it as compatible with new MSG-only
+exports or recommend catalog/ingest commands as a complete new-format workflow. Keep legacy support
+separate and document this boundary until real MSG integration tests pass.
+VBA writes only one email's files at a time; Python builds global indexes in bounded batches.
 DuckDB catalogs stay local, outside OneDrive/SharePoint synchronization while open. Export and catalog
 locks are mutual exclusion signals; an interrupted catalog publication must be repaired before ingest.
 Model discovery must distinguish installed SDK support, live Hugging Face checks, downloaded files,

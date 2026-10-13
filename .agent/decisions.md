@@ -96,3 +96,24 @@ adapter if installation changes. Generative GGUF discovery/download is separate;
 only import into an existing local Ollama when explicitly requested. GUI workers do network work off
 Tk's main thread and apply configuration only through user selection/save. Never equate live metadata,
 downloaded files, successful inference, or model answer quality.
+
+## ADR-0006: VBA is a dumb physical-file extractor
+
+Date: 2026-10-13. Status: Accepted; supersedes VBA sidecar/text responsibilities in ADR-0005.
+The user explicitly requires Phase 1 to output only Unicode MSG archives, physical attachments
+separated by file type, and internal idempotency state. Remove body access, Email.txt, metadata.json,
+JSON helpers, relative RAG maps and Track 1/2 routing from VBA. Preserve export filters and readable
+physical names; address/date/subject reads for filtering/naming do not establish a RAG schema.
+
+Use Attachments/Type_<validated extension> or Other within each mail directory. Operational files are
+export.lock, append-only Processed_Cache.log, and per-mail _state/source_id.txt plus complete.txt.
+Never load the global log into memory; the per-mail checkpoint is authoritative. The raw-msg-v1
+checkpoint includes the threshold and full source identity. Legacy completion markers cannot skip the
+new format. Preserve copy-only defaults and explicitly confirmed cleanup after physical backups.
+
+Python Phase 2 owns 100% of RAG modeling: native MSG parsing (extract-msg is a candidate), bodies,
+headers/structured metadata, attachment association, Markdown/JSONL, DuckDB/Polars cataloging and
+SQL/vector data. Native MSG parsing is the next implementation task; it is not present in the current
+Python parser/catalog. The existing sidecar-based pipeline is retained for legacy exports only.
+Do not claim that catalog/ingest already consumes fresh MSG-only exports. Use a fresh raw root when
+migrating; no automatic removal of historical user artifacts is authorized by this refactor.
