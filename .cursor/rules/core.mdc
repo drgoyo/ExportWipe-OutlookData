@@ -1,0 +1,9 @@
+---
+description: Shared core contracts and mirrored tests
+globs: "src/project_name/core/**/*.py,tests/project_name/core/**/*.py"
+alwaysApply: false
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/core.md

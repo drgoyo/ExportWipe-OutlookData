@@ -1,0 +1,17 @@
+---
+description: Legacy entry point for canonical agent memory
+---
+
+Read AGENTS.md, .agent/status.md, .agent/plan.md, .agent/decisions.md, and .agent/rules/coding.md first.
+Select contextual rules according to the paths being edited:
+
+| Path | Rule |
+| --- | --- |
+| src/project_name/core/** | .agent/rules/core.md |
+| src/pipelines/** | .agent/rules/pipelines.md |
+| src/project_name/infrastructure/** | .agent/rules/infrastructure.md |
+| config/** | .agent/rules/config.md |
+| tests/** | .agent/rules/testing.md plus the rule for the mirrored package |
+
+Native Cursor path matching is configured in .cursor/rules/*.mdc. This legacy entry point instructs
+readers to select rules and does not require a custom frontmatter loader.

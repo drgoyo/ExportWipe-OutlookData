@@ -1,0 +1,9 @@
+---
+description: Independent pipeline contexts and mirrored tests
+globs: "src/pipelines/**/*.py,tests/pipelines/**/*.py"
+alwaysApply: false
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/pipelines.md

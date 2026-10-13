@@ -1,0 +1,9 @@
+---
+description: Runtime configuration and its tests
+globs: "config/**/*.py,tests/config/**/*.py"
+alwaysApply: false
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/config.md

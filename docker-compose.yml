@@ -1,0 +1,116 @@
+name: outlook-rag
+
+services:
+  catalog:
+    image: outlook-rag:local
+    build: .
+    profiles: [tools]
+    command: ["--config", "/app/config.yaml", "catalog"]
+    user: "${EW_CATALOG_UID:-10001}:${EW_CATALOG_GID:-10001}"
+    volumes:
+      - ./data/raw:/data/raw:rw
+    network_mode: none
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=256m"]
+    healthcheck:
+      disable: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 1g
+    pids_limit: 256
+
+  chroma:
+    image: outlook-rag-chroma:local
+    build:
+      context: .
+      dockerfile: docker/chroma.Dockerfile
+    restart: unless-stopped
+    environment:
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - chroma-data:/data
+    command: ["run", "--host", "0.0.0.0", "--port", "8000", "--path", "/data"]
+    networks: [storage]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v2/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 2g
+    pids_limit: 256
+
+  backend:
+    build: .
+    image: outlook-rag:local
+    restart: unless-stopped
+    environment:
+      EW_API_TOKEN: ${EW_API_TOKEN:?Set a strong EW_API_TOKEN in .env}
+      EW_LLM_API_KEY: ${EW_LLM_API_KEY:-}
+      EW_LLM_BASE_URL: ${EW_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      EW_LLM_MODEL: ${EW_LLM_MODEL:-llama3.2}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ./data/raw:/data/raw:ro
+      - app-data:/data/state
+      - model-cache:/data/models
+    networks: [storage, outbound]
+    depends_on:
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=256m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 2g
+    pids_limit: 256
+
+  dashboard:
+    image: outlook-rag:local
+    build: .
+    restart: unless-stopped
+    entrypoint: ["outlook-rag-dashboard"]
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "8501"]
+    environment:
+      EW_LLM_API_KEY: ${EW_LLM_API_KEY:-}
+      EW_LLM_BASE_URL: ${EW_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      EW_LLM_MODEL: ${EW_LLM_MODEL:-llama3.2}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["127.0.0.1:8501:8501"]
+    volumes:
+      - ./data/raw:/data/raw:ro
+      - app-data:/data/state
+      - model-cache:/data/models
+    networks: [storage, outbound]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=256m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 1g
+    pids_limit: 256
+
+volumes:
+  app-data:
+  model-cache:
+  chroma-data:
+
+networks:
+  storage:
+    internal: true
+  outbound:

@@ -1,0 +1,57 @@
+schema_version: 1
+extraction:
+  output_directory: data/raw
+  filter_date: '2026-01-01'
+  older_than_date: true
+  date_filter_mode: 0
+  process_all_subfolders: true
+  minimum_attachment_bytes: 0
+  exclude_freemail: true
+  freemail_domains:
+  - gmail.com
+  - googlemail.com
+  - outlook.com
+  - hotmail.com
+  - live.com
+  - web.de
+  - gmx.de
+  - gmx.net
+  - gmx.com
+  - yahoo.com
+  - yahoo.de
+  - icloud.com
+  - me.com
+  - mac.com
+  - t-online.de
+  - freenet.de
+  - aol.com
+  archive_pst: false
+  deletion_mode: 0
+  allow_destructive: false
+tracks:
+  track1_enabled: true
+  track2_enabled: true
+parsing:
+  output_directory: data/processed
+  max_file_bytes: 50000000
+  max_uncompressed_bytes: 250000000
+  max_table_rows: 10000
+  ocr_language: eng
+  tesseract_command: tesseract
+  ocr_timeout_seconds: 120
+storage:
+  sqlite_path: data/outlook.sqlite3
+  chroma_directory: data/chroma
+  chroma_host: ''
+  chroma_port: 8000
+  chroma_ssl: false
+  collection: outlook_documents
+  embedding_model: BAAI/bge-small-en-v1.5
+  model_cache: data/models
+  chunk_characters: 1500
+  chunk_overlap: 200
+llm:
+  base_url: http://127.0.0.1:11434/v1
+  model: llama3.2
+  timeout_seconds: 120
+  max_context_characters: 24000

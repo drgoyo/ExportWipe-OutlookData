@@ -1,0 +1,49 @@
+name: Python quality gates
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.12.23"
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install OCR runtime
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr xvfb xauth
+      - name: Install locked dependencies
+        run: uv sync --locked --all-extras --group build
+      - name: Lint
+        run: uv run --no-sync ruff check
+      - name: Check formatting
+        run: uv run --no-sync ruff format --check
+      - name: Type check
+        run: uv run --no-sync mypy
+      - name: Check architecture
+        run: uv run --no-sync lint-imports
+      - name: Test infrastructure
+        run: xvfb-run -a uv run --no-sync pytest
+      - name: Build distributions
+        run: uv build

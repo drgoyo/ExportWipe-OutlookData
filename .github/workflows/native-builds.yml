@@ -1,0 +1,66 @@
+name: Native executable builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'config/**'
+      - 'scripts/**'
+      - 'build.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'config.example.yaml'
+      - '.github/workflows/native-builds.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+          enable-cache: true
+      - name: Install locked build dependencies
+        run: uv sync --locked --all-extras --group build
+      - name: Build native bundles
+        run: uv run --no-sync python build.py --target all
+      - name: Smoke test entry points
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+          suffix = '.exe' if sys.platform == 'win32' else ''
+          for name in ['OutlookRAGConfig', 'OutlookRAGBackend', 'OutlookRAGDashboard']:
+              candidates = list(pathlib.Path('artifacts').glob(f'*/{name}/{name}{suffix}'))
+              candidates += list(pathlib.Path('artifacts').glob(f'*/{name}.app/Contents/MacOS/{name}'))
+              path = candidates[0]
+              subprocess.run([str(path.resolve()), '--help'], check=True, timeout=60)
+          PY
+      - name: Upload bundles and manifests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: outlook-rag-${{ matrix.os }}
+          path: artifacts/
+          retention-days: 7
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs-${{ matrix.os }}
+          path: .pyinstaller/*/build.log

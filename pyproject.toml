@@ -1,0 +1,143 @@
+[project]
+name = "exportwipe-outlookdata"
+version = "0.3.0"
+description = "Dual-track Outlook RAG, document ETL, MCP SQL, and analytics"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "duckdb>=1.4,<2",
+    "httpx>=0.28,<1",
+    "polars>=1.30,<2",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.9,<3",
+    "pyyaml>=6,<7",
+    "sqlglot>=27,<31",
+]
+
+[project.optional-dependencies]
+parsing = [
+    "python-docx>=1.1,<2",
+    "openpyxl>=3.1,<4",
+    "python-pptx>=1,<2",
+    "pillow>=11,<13",
+    "pytesseract>=0.3.13,<1",
+]
+rag = [
+    "chromadb>=1.0,<2",
+    "fastapi>=0.116,<1",
+    "fastembed>=0.7,<1",
+    "huggingface-hub>=1.0,<2",
+    "mcp>=1.12,<2",
+    "uvicorn>=0.35,<1",
+]
+dashboard = ["streamlit>=1.45,<2"]
+
+[project.scripts]
+outlook-rag = "project_name.cli:main"
+outlook-rag-config = "project_name.gui_entry:main"
+outlook-rag-dashboard = "project_name.dashboard_entry:main"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "import-linter>=2.3,<3",
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+    "types-PyYAML>=6,<7",
+    "types-openpyxl>=3.1,<4",
+]
+build = ["pyinstaller>=6.15,<7"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/project_name", "src/pipelines", "config"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/config", "/tests", "/docs", "/scripts", "/build.py", "/pyproject.toml", "/README.md", "/LICENSE"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "N", "ANN", "TID", "TC", "RUF", "PTH", "S", "PT"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["project_name", "pipelines", "config"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+files = ["src", "config", "tests", "build.py", "scripts"]
+
+[tool.pytest.ini_options]
+minversion = "8.3"
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers --import-mode=importlib -ra"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["project_name", "config"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.importlinter]
+root_packages = ["project_name", "pipelines", "config"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core stays independent of adapters, slices, and runtime configuration"
+type = "forbidden"
+source_modules = ["project_name.core"]
+forbidden_modules = ["project_name.infrastructure", "pipelines", "config", "polars", "pydantic_settings"]
+
+[[tool.importlinter.contracts]]
+name = "Slices depend on core ports, never concrete adapters or runtime configuration"
+type = "forbidden"
+source_modules = ["pipelines.document_parsing", "pipelines.data_ingestion", "pipelines.rag_agents", "pipelines.analytics", "pipelines.export_catalog"]
+forbidden_modules = ["project_name.infrastructure", "config"]
+
+[[tool.importlinter.contracts]]
+name = "Infrastructure cannot depend on pipeline implementations"
+type = "forbidden"
+source_modules = ["project_name.infrastructure"]
+forbidden_modules = ["pipelines"]
+
+[[tool.importlinter.contracts]]
+name = "Configuration cannot depend on application packages"
+type = "forbidden"
+source_modules = ["config"]
+forbidden_modules = ["project_name", "pipelines"]
+
+[[tool.importlinter.contracts]]
+name = "Pipeline bounded contexts are independent"
+type = "independence"
+modules = ["pipelines.configuration_gui", "pipelines.document_parsing", "pipelines.data_ingestion", "pipelines.rag_agents", "pipelines.analytics", "pipelines.vba_extraction", "pipelines.export_catalog"]
+
+[[tool.mypy.overrides]]
+module = ["pytesseract", "pytesseract.*"]
+ignore_missing_imports = true

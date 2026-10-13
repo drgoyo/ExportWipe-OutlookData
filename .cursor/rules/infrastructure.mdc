@@ -1,0 +1,9 @@
+---
+description: Concrete infrastructure adapters and mirrored tests
+globs: "src/project_name/infrastructure/**/*.py,tests/project_name/infrastructure/**/*.py"
+alwaysApply: false
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/infrastructure.md

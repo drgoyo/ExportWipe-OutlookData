@@ -1,0 +1,9 @@
+---
+description: Deterministic infrastructure and package tests
+globs: "tests/**/*.py"
+alwaysApply: false
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/testing.md

@@ -1,0 +1,9 @@
+---
+description: Repository-wide Python and architecture policy
+globs: ""
+alwaysApply: true
+---
+
+Follow AGENTS.md and the canonical memory-bank rule:
+
+@.agent/rules/coding.md

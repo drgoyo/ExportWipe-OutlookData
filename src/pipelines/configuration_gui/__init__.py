@@ -1,0 +1,1 @@
+"""Configuration gui bounded context."""
